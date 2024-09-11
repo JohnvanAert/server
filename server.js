@@ -56,7 +56,6 @@ const authenticateSession = (req, res, next) => {
     console.log("Session authenticated for user:", req.session.user);
     next();
   } else {
-    console.log("Unauthorized access attempt");
     res.status(401).json({ message: 'Not authorized' });
   }
 };
@@ -65,14 +64,11 @@ const authenticateSession = (req, res, next) => {
 app.post('/api/login', async (req, res) => {
   const { username, password } = req.body;
 
-  console.log("Login request received for:", username); // Логируем запрос
-
   try {
     // Поиск пользователя в базе данных
     const userResult = await pool.query('SELECT * FROM users WHERE username = $1', [username]);
 
     if (userResult.rows.length === 0) {
-      console.log("User not found:", username);
       return res.status(400).json({ message: 'User not found' });
     }
 
@@ -82,7 +78,7 @@ app.post('/api/login', async (req, res) => {
     // Проверка пароля
     const isPasswordValid = bcrypt.compareSync(password, user.password);
     if (!isPasswordValid) {
-      console.log("Invalid password for user:", username);
+      
       return res.status(400).json({ message: 'Invalid password' });
     }
 
@@ -93,7 +89,6 @@ app.post('/api/login', async (req, res) => {
     
     res.json({ message: 'Login successful' });
   } catch (err) {
-    console.error("Error during login:", err);
     res.status(500).json({ message: 'Server error' });
   }
 });
@@ -104,14 +99,12 @@ app.get('/api/user', authenticateSession, async (req, res) => {
     const userResult = await pool.query('SELECT * FROM users WHERE id = $1', [req.session.user.id]);
 
     if (userResult.rows.length === 0) {
-      console.log("User not found for session user ID:", req.session.user.id);
       return res.status(404).json({ message: 'User not found' });
     }
 
     const user = userResult.rows[0];
     res.json({ id: user.id, username: user.username, role: user.role, email: user.email });
   } catch (err) {
-    console.error("Error fetching user data:", err);
     res.status(500).json({ message: 'Server error' });
   }
 });
@@ -119,7 +112,6 @@ app.get('/api/user', authenticateSession, async (req, res) => {
 // Маршрут для проверки сессии
 app.get('/api/check-session', (req, res) => {
   if (req.session.user) {
-    console.log('Active session:', req.session);  // Логируем сессию на сервере
     res.json({ isAuthenticated: true, user: req.session.user });
   } else {
     res.json({ isAuthenticated: false });
@@ -149,7 +141,6 @@ app.get('/api/admin', authenticateSession, (req, res) => {
 app.post('/api/logout', (req, res) => {
   req.session.destroy(err => {
     if (err) {
-      console.error("Error during logout:", err);
       return res.status(500).json({ message: 'Logout failed' });
     }
     res.clearCookie('connect.sid'); // Очищаем куки
@@ -166,10 +157,8 @@ app.post('/api/refresh-session', authenticateSession, (req, res) => {
 // Маршрут для проверки сессии
 app.get('/api/check-session', (req, res) => {
   if (req.session.user) {
-    console.log("Session active for user:", req.session.user.username); // Логируем активную сессию
     res.json({ isAuthenticated: true, user: req.session.user });
   } else {
-    console.log("No active session");
     res.json({ isAuthenticated: false });
   }
 });
