@@ -93,6 +93,8 @@ app.post('/api/login', async (req, res) => {
   }
 });
 
+
+
 // Маршрут для получения данных пользователя
 app.get('/api/user', authenticateSession, async (req, res) => {
   try {
@@ -109,6 +111,31 @@ app.get('/api/user', authenticateSession, async (req, res) => {
   }
 });
 
+
+//Получить таблицы с коммандами
+
+// Маршрут для получения данных о командах
+app.get('/admin/teams', async (req, res) => {
+  try {
+    // SQL-запрос для получения данных о всех командах и их пользователях
+    const teamsData = await pool.query(`
+      SELECT users.id, users.username AS name, users.role, teams.name AS team_name
+      FROM users
+      JOIN teams ON users.team_id = teams.id
+      ORDER BY teams.name, 
+               CASE WHEN users.role = 'team_leader' THEN 0 ELSE 1 END, 
+               users.id;
+    `);
+    
+    // Возвращаем данные в формате JSON
+    res.json(teamsData.rows);
+  } catch (err) {
+    console.error('Error fetching teams data:', err);
+    res.status(500).json({ error: 'Server error fetching teams data' });
+  }
+});
+
+
 // Маршрут для проверки сессии
 app.get('/api/check-session', (req, res) => {
   if (req.session.user) {
@@ -117,6 +144,58 @@ app.get('/api/check-session', (req, res) => {
     res.json({ isAuthenticated: false });
   }
 });
+
+
+// Маршрут для получения данных команды тимлидера
+app.get('/teamleader/team', (req, res, next) => {
+  if (!req.session.user || req.session.user.role !== 'team_leader') {
+    // Возвращаем 403 если пользователь не team_leader или сессия не установлена
+    return res.status(403).json({ error: 'Unauthorized' });
+  }
+  next();
+}, async (req, res) => {
+  const { id: userId } = req.session.user;
+  try {
+    const result = await pool.query(`
+      SELECT users.id, users.username, users.role, teams.name 
+      FROM users
+      JOIN teams ON users.team_id = teams.id
+      WHERE teams.leader_id = $1
+      ORDER BY users.role = 'team_leader' DESC, users.id ASC;
+    `, [userId]);
+    
+    res.json(result.rows);
+  } catch (error) {
+    console.error('Error on fetching team data:', error);
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
+
+app.get('/user/team', (req, res, next) => {
+  // Проверка, что пользователь существует и у него роль не 'user'
+  if (!req.session.user || req.session.user.role !== 'user') {
+    return res.redirect('/unauthorized'); // Перенаправляем на маршрут /unauthorized
+  }
+  next();
+}, async (req, res) => {
+  const { team_id } = req.session.user;
+  try {
+    const result = await pool.query(`
+      SELECT users.id, users.username, users.role
+      FROM users
+      WHERE users.team_id = $1
+      ORDER BY users.role = 'team_leader' DESC, users.id ASC;
+    `, [team_id]);
+
+    res.json(result.rows);
+  } catch (error) {
+    console.error('Error on fetching team data:', error);
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
+
+
+// конец получения таблицы
 
 
 // Маршрут для Team Leader
