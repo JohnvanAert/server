@@ -73,16 +73,12 @@ app.post('/api/login', async (req, res) => {
     }
 
     const user = userResult.rows[0];
-    console.log("User found:", user.username); // Логируем найденного пользователя
-
     // Проверка пароля
     const isPasswordValid = bcrypt.compareSync(password, user.password);
     if (!isPasswordValid) {
       
       return res.status(400).json({ message: 'Invalid password' });
     }
-
-    console.log("Password validated for user:", username); // Логируем успешную проверку пароля
 
     // Сохраняем данные пользователя в сессии
     req.session.user = { id: user.id, role: user.role, email: user.email, team_id: user.team_id };
@@ -114,26 +110,208 @@ app.get('/api/user', authenticateSession, async (req, res) => {
 
 //Получить таблицы с коммандами
 
-// Маршрут для получения данных о командах
-app.get('/admin/teams', async (req, res) => {
+// Универсальный маршрут для получения данных команд
+app.get('/teams', async (req, res, next) => {
+  // Проверка, что пользователь авторизован
+  if (!req.session.user) {
+    return res.redirect('/unauthorized'); // Перенаправляем на маршрут /unauthorized
+  }
+
+  const { id: userId, role, team_id } = req.session.user;
+
   try {
-    // SQL-запрос для получения данных о всех командах и их пользователях
-    const teamsData = await pool.query(`
-      SELECT users.id, users.username AS name, users.role, teams.name AS team_name
-      FROM users
-      JOIN teams ON users.team_id = teams.id
-      ORDER BY teams.name, 
-               CASE WHEN users.role = 'team_leader' THEN 0 ELSE 1 END, 
-               users.id;
-    `);
-    
-    // Возвращаем данные в формате JSON
-    res.json(teamsData.rows);
-  } catch (err) {
-    console.error('Error fetching teams data:', err);
-    res.status(500).json({ error: 'Server error fetching teams data' });
+    let query;
+    let queryParams = [];
+
+    // Логика для администратора
+    if (role === 'admin') {
+      query = `
+        SELECT users.id, users.username AS name, users.role, teams.name AS team_name
+        FROM users
+        JOIN teams ON users.team_id = teams.id
+        ORDER BY teams.name, 
+                 CASE WHEN users.role = 'team_leader' THEN 0 ELSE 1 END, 
+                 users.id;
+      `;
+    }
+    // Логика для тимлидера
+    else if (role === 'team_leader') {
+      query = `
+        SELECT users.id, users.username, users.role, teams.name 
+        FROM users
+        JOIN teams ON users.team_id = teams.id
+        WHERE teams.leader_id = $1
+        ORDER BY users.role = 'team_leader' DESC, users.id ASC;
+      `;
+      queryParams = [userId];
+    }
+    // Логика для обычного пользователя
+    else if (role === 'user') {
+      query = `
+        SELECT users.id, users.username, users.role
+        FROM users
+        WHERE users.team_id = $1
+        ORDER BY users.role = 'team_leader' DESC, users.id ASC;
+      `;
+      queryParams = [team_id];
+    } else {
+      return res.redirect('/unauthorized');
+    }
+
+    // Выполняем запрос
+    const result = await pool.query(query, queryParams);
+    res.json(result.rows);
+
+  } catch (error) {
+    console.error('Error fetching team data:', error);
+    res.status(500).json({ error: 'Internal Server Error' });
   }
 });
+
+
+
+// конец получения таблицы
+
+
+//Tickets
+
+// Маршрут для добавления нового тикета для тимлидера
+app.post('/api/tickets', async (req, res) => {
+  const { amount, description, link } = req.body;
+  
+  if (!req.session.user || req.session.user.role !== 'user') {
+    return res.status(403).json({ error: 'Unauthorized' });
+  }
+
+  try {
+    const result = await pool.query(
+      'INSERT INTO tickets (user_id, amount, description, link) VALUES ($1, $2, $3, $4) RETURNING *',
+      [req.session.user.id, amount, description, link]
+    );
+    res.json(result.rows[0]);
+  } catch (error) {
+    console.error('Error adding ticket:', error);
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
+
+// Маршрут для создания тикета
+app.post('/requests/add', async (req, res) => {
+  if (!req.session.user || req.session.user.role !== 'user') {
+    return res.status(403).json({ error: 'Unauthorized' });
+  }
+
+  const { amount, link, quantity } = req.body;
+  const userId = req.session.user.id;
+
+  try {
+    const result = await pool.query(`
+      INSERT INTO requests(user_id, amount, link, quantity, status, created_at, updated_at)
+      VALUES ($1, $2, $3, $4, 'pending', NOW(), NOW())
+      RETURNING *;
+    `, [userId, amount, link, quantity]);
+
+    res.status(201).json(result.rows[0]);
+  } catch (error) {
+    console.error('Error on adding new request:', error);
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
+
+app.get('/teamleader/requests', async (req, res) => {
+  const teamId = req.session.user.team_id;
+
+  if (!teamId) {
+    return res.status(400).json({ error: 'Team ID не установлен в сессии' });
+  }
+
+  try {
+    const requests = await pool.query(
+      `SELECT r.id, r.user_id, r.amount, r.link, r.quantity, r.status, r.created_at
+       FROM requests r
+       JOIN users u ON u.id = r.user_id
+       WHERE u.team_id = $1
+       AND r.status = 'pending'`,
+      [teamId]
+    );
+
+    res.json(requests.rows);
+  } catch (err) {
+    console.error(err);
+    res.status(500).send('Ошибка при получении заявок');
+  }
+});
+
+
+//End of tickets
+
+
+//TeamLead Reject Function
+
+
+// Маршрут для утверждения заявки тимлидером
+app.put('/teamleader/requests/approve/:requestId', async (req, res) => {
+  const requestId = req.params.requestId;
+  const teamId = req.session.user.team_id;
+
+  if (req.session.user.role !== 'team_leader') {
+    return res.status(403).json({ message: 'Access denied' });
+  }
+
+  try {
+    // Обновляем статус заявки на "approved"
+    const result = await pool.query(`
+      UPDATE requests
+      SET status = 'approved', updated_at = NOW()
+      WHERE id = $1 AND user_id IN (SELECT id FROM users WHERE team_id = $2)
+      RETURNING *;
+    `, [requestId, teamId]);
+
+    if (result.rowCount === 0) {
+      return res.status(404).json({ message: 'Request not found or does not belong to your team' });
+    }
+
+    res.json({ message: 'Request approved', request: result.rows[0] });
+  } catch (err) {
+    console.error('Error approving request:', err);
+    res.status(500).json({ message: 'Internal Server Error' });
+  }
+});
+
+// Маршрут для отклонения заявки тимлидером
+app.put('/teamleader/requests/reject/:requestId', async (req, res) => {
+  const requestId = req.params.requestId;
+  const teamId = req.session.user.team_id;
+
+  if (req.session.user.role !== 'team_leader') {
+    return res.status(403).json({ message: 'Access denied' });
+  }
+
+  try {
+    // Обновляем статус заявки на "rejected"
+    const result = await pool.query(`
+      UPDATE requests
+      SET status = 'rejected', updated_at = NOW()
+      WHERE id = $1 AND user_id IN (SELECT id FROM users WHERE team_id = $2)
+      RETURNING *;
+    `, [requestId, teamId]);
+
+    if (result.rowCount === 0) {
+      return res.status(404).json({ message: 'Request not found or does not belong to your team' });
+    }
+
+    res.json({ message: 'Request rejected', request: result.rows[0] });
+  } catch (err) {
+    console.error('Error rejecting request:', err);
+    res.status(500).json({ message: 'Internal Server Error' });
+  }
+});
+
+
+
+
+//End of teamlead finction
+
 
 
 // Маршрут для проверки сессии
@@ -144,58 +322,6 @@ app.get('/api/check-session', (req, res) => {
     res.json({ isAuthenticated: false });
   }
 });
-
-
-// Маршрут для получения данных команды тимлидера
-app.get('/teamleader/team', (req, res, next) => {
-  if (!req.session.user || req.session.user.role !== 'team_leader') {
-    // Возвращаем 403 если пользователь не team_leader или сессия не установлена
-    return res.status(403).json({ error: 'Unauthorized' });
-  }
-  next();
-}, async (req, res) => {
-  const { id: userId } = req.session.user;
-  try {
-    const result = await pool.query(`
-      SELECT users.id, users.username, users.role, teams.name 
-      FROM users
-      JOIN teams ON users.team_id = teams.id
-      WHERE teams.leader_id = $1
-      ORDER BY users.role = 'team_leader' DESC, users.id ASC;
-    `, [userId]);
-    
-    res.json(result.rows);
-  } catch (error) {
-    console.error('Error on fetching team data:', error);
-    res.status(500).json({ error: 'Internal Server Error' });
-  }
-});
-
-app.get('/user/team', (req, res, next) => {
-  // Проверка, что пользователь существует и у него роль не 'user'
-  if (!req.session.user || req.session.user.role !== 'user') {
-    return res.redirect('/unauthorized'); // Перенаправляем на маршрут /unauthorized
-  }
-  next();
-}, async (req, res) => {
-  const { team_id } = req.session.user;
-  try {
-    const result = await pool.query(`
-      SELECT users.id, users.username, users.role
-      FROM users
-      WHERE users.team_id = $1
-      ORDER BY users.role = 'team_leader' DESC, users.id ASC;
-    `, [team_id]);
-
-    res.json(result.rows);
-  } catch (error) {
-    console.error('Error on fetching team data:', error);
-    res.status(500).json({ error: 'Internal Server Error' });
-  }
-});
-
-
-// конец получения таблицы
 
 
 // Маршрут для Team Leader
