@@ -249,68 +249,135 @@ app.get('/teamleader/requests', async (req, res) => {
 //TeamLead Reject Function
 
 
-// Маршрут для утверждения заявки тимлидером
-app.put('/teamleader/requests/approve/:requestId', async (req, res) => {
-  const requestId = req.params.requestId;
-  const teamId = req.session.user.team_id;
-
-  if (req.session.user.role !== 'team_leader') {
-    return res.status(403).json({ message: 'Access denied' });
-  }
+app.put('/teamleader/requests/:id/approve', async (req, res) => {
+  const requestId = req.params.id;
 
   try {
-    // Обновляем статус заявки на "approved"
-    const result = await pool.query(`
-      UPDATE requests
-      SET status = 'approved', updated_at = NOW()
-      WHERE id = $1 AND user_id IN (SELECT id FROM users WHERE team_id = $2)
-      RETURNING *;
-    `, [requestId, teamId]);
+    // Step 1: Approve the request
+    console.log("Request ID to approve:", requestId);
+    const requestResult = await pool.query('UPDATE requests SET status = $1, updated_at = NOW() WHERE id = $2 RETURNING *', ['approved', requestId]);
+    
+    const approvedRequest = requestResult.rows[0];
 
-    if (result.rowCount === 0) {
-      return res.status(404).json({ message: 'Request not found or does not belong to your team' });
+    if (!approvedRequest) {
+      return res.status(404).json({ message: 'Request not found' });
     }
 
-    res.json({ message: 'Request approved', request: result.rows[0] });
-  } catch (err) {
-    console.error('Error approving request:', err);
-    res.status(500).json({ message: 'Internal Server Error' });
-  }
-});
+    // Step 2: Insert into the expenses table
+    console.log("Inserting into expenses:", {
+      user_id: approvedRequest.user_id,
+      request_id: approvedRequest.id,
+      amount: approvedRequest.amount,
+    });
 
-// Маршрут для отклонения заявки тимлидером
-app.put('/teamleader/requests/reject/:requestId', async (req, res) => {
-  const requestId = req.params.requestId;
-  const teamId = req.session.user.team_id;
+    const insertExpense = await pool.query(
+      'INSERT INTO expenses (user_id, request_id, amount, created_at) VALUES ($1, $2, $3, NOW()) RETURNING *',
+      [approvedRequest.user_id, approvedRequest.id, approvedRequest.amount]
+    );
 
-  if (req.session.user.role !== 'team_leader') {
-    return res.status(403).json({ message: 'Access denied' });
-  }
 
-  try {
-    // Обновляем статус заявки на "rejected"
-    const result = await pool.query(`
-      UPDATE requests
-      SET status = 'rejected', updated_at = NOW()
-      WHERE id = $1 AND user_id IN (SELECT id FROM users WHERE team_id = $2)
-      RETURNING *;
-    `, [requestId, teamId]);
+    // Step 3: Send response
+    res.status(200).json({
+      message: 'Request approved and moved to expenses',
+      expense: insertExpense.rows[0],
+    });
 
-    if (result.rowCount === 0) {
-      return res.status(404).json({ message: 'Request not found or does not belong to your team' });
-    }
-
-    res.json({ message: 'Request rejected', request: result.rows[0] });
-  } catch (err) {
-    console.error('Error rejecting request:', err);
-    res.status(500).json({ message: 'Internal Server Error' });
+  } catch (error) {
+    res.status(500).send("Server error");
   }
 });
 
 
+
+
+app.put('/teamleader/requests/:id/reject', async (req, res) => {
+  const requestId = req.params.id;
+  console.log("Request ID:", requestId);  // Логируем ID заявки
+  console.log("Request body:", req.body);  // Логируем тело запроса
+
+  try {
+    const result = await pool.query('UPDATE requests SET status = $1 WHERE id = $2 RETURNING *', ['rejected', requestId]);
+    res.status(200).json({ message: "Request rejected successfully" });
+  } catch (error) {
+    res.status(500).json({ error: "Internal Server Error" });
+  }
+});
 
 
 //End of teamlead finction
+
+
+//Expenses
+//Expenses
+app.get('/api/expenses', async (req, res) => {
+  const userRole = req.session.user.role;
+  const teamId = req.session.user.team_id;
+  const limit = parseInt(req.query.limit) || 10;  // Лимит записей на страницу
+  const offset = parseInt(req.query.offset) || 0;  // Смещение
+
+  if (!userRole) {
+    return res.status(400).json({ error: 'User role не установлен' });
+  }
+
+  try {
+    let query = '';
+    let params = [limit, offset];
+    let countQuery = '';
+    let countParams = [];
+
+    if (userRole === 'admin') {
+      query = `
+        SELECT expenses.*, requests.amount, requests.link, users.username, teams.name as team_name
+        FROM expenses
+        JOIN requests ON expenses.request_id = requests.id
+        JOIN users ON expenses.user_id = users.id
+        JOIN teams ON users.team_id = teams.id
+        ORDER BY teams.name
+        LIMIT $1 OFFSET $2;
+      `;
+      countQuery = `
+        SELECT COUNT(*) FROM expenses
+        JOIN requests ON expenses.request_id = requests.id
+        JOIN users ON expenses.user_id = users.id
+        JOIN teams ON users.team_id = teams.id;
+      `;
+    } else if (userRole === 'team_leader' || userRole === 'user') {
+      query = `
+        SELECT expenses.*, requests.amount, requests.link, users.username 
+        FROM expenses
+        JOIN requests ON expenses.request_id = requests.id
+        JOIN users ON expenses.user_id = users.id
+        WHERE users.team_id = $3
+        LIMIT $1 OFFSET $2;
+      `;
+      countQuery = `
+        SELECT COUNT(*) FROM expenses
+        JOIN requests ON expenses.request_id = requests.id
+        JOIN users ON expenses.user_id = users.id
+        WHERE users.team_id = $1;
+      `;
+      params.push(teamId);
+      countParams.push(teamId);
+    } else {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+
+    const result = await pool.query(query, params);
+    const countResult = await pool.query(countQuery, countParams);
+    const totalItems = parseInt(countResult.rows[0].count, 10);
+
+    res.json({ expenses: result.rows, totalItems });
+  } catch (error) {
+    console.error('Ошибка при получении расходов:', error);
+    res.status(500).json({ message: 'Ошибка сервера' });
+  }
+});
+
+//End expenses
+
+
+//End expenses
+
 
 
 
