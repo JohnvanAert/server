@@ -308,16 +308,23 @@ app.put('/teamleader/requests/:id/reject', async (req, res) => {
 
 
 //Expenses
-//Expenses
 app.get('/api/expenses', async (req, res) => {
   const userRole = req.session.user.role;
   const teamId = req.session.user.team_id;
-  const limit = parseInt(req.query.limit) || 10;  // Лимит записей на страницу
-  const offset = parseInt(req.query.offset) || 0;  // Смещение
+  const limit = parseInt(req.query.limit) || 10;  
+  const offset = parseInt(req.query.offset) || 0;  
+  const sortBy = req.query.sortBy || 'created_at';  // Поле для сортировки (по умолчанию по дате создания)
+  const sortOrder = req.query.sortOrder === 'desc' ? 'DESC' : 'ASC';  // Порядок сортировки
 
-  if (!userRole) {
-    return res.status(400).json({ error: 'User role не установлен' });
-  }
+  // Мапинг поля сортировки для указания правильной таблицы
+  const validSortFields = {
+    'created_at': 'expenses.created_at',
+    'amount': 'expenses.amount',
+    'username': 'users.username',
+    'team_name': 'teams.name',
+  };
+
+  const sortByField = validSortFields[sortBy] || 'expenses.created_at';  // Защита от некорректных значений
 
   try {
     let query = '';
@@ -332,7 +339,7 @@ app.get('/api/expenses', async (req, res) => {
         JOIN requests ON expenses.request_id = requests.id
         JOIN users ON expenses.user_id = users.id
         JOIN teams ON users.team_id = teams.id
-        ORDER BY teams.name
+        ORDER BY ${sortByField} ${sortOrder}
         LIMIT $1 OFFSET $2;
       `;
       countQuery = `
@@ -348,6 +355,7 @@ app.get('/api/expenses', async (req, res) => {
         JOIN requests ON expenses.request_id = requests.id
         JOIN users ON expenses.user_id = users.id
         WHERE users.team_id = $3
+        ORDER BY ${sortByField} ${sortOrder}
         LIMIT $1 OFFSET $2;
       `;
       countQuery = `
@@ -372,9 +380,6 @@ app.get('/api/expenses', async (req, res) => {
     res.status(500).json({ message: 'Ошибка сервера' });
   }
 });
-
-//End expenses
-
 
 //End expenses
 
