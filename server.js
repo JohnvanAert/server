@@ -316,6 +316,11 @@ app.get('/api/expenses', async (req, res) => {
   const sortBy = req.query.sortBy || 'created_at';  // Поле для сортировки (по умолчанию по дате создания)
   const sortOrder = req.query.sortOrder === 'desc' ? 'DESC' : 'ASC';  // Порядок сортировки
 
+  const webmasterFilter = req.query.webmaster || null;  // Фильтр по вебмастеру (ID пользователя)
+  const amountFilter = req.query.amount || null;  // Фильтр по сумме расходов
+  const startDate = req.query.startDate || null;  // Начальная дата для фильтрации
+  const endDate = req.query.endDate || null;  // Конечная дата для фильтрации
+
   // Мапинг поля сортировки для указания правильной таблицы
   const validSortFields = {
     'created_at': 'expenses.created_at',
@@ -339,15 +344,45 @@ app.get('/api/expenses', async (req, res) => {
         JOIN requests ON expenses.request_id = requests.id
         JOIN users ON expenses.user_id = users.id
         JOIN teams ON users.team_id = teams.id
-        ORDER BY ${sortByField} ${sortOrder}
-        LIMIT $1 OFFSET $2;
+        WHERE 1=1
       `;
       countQuery = `
         SELECT COUNT(*) FROM expenses
         JOIN requests ON expenses.request_id = requests.id
         JOIN users ON expenses.user_id = users.id
-        JOIN teams ON users.team_id = teams.id;
+        JOIN teams ON users.team_id = teams.id
+        WHERE 1=1
       `;
+      
+      // Добавляем фильтры для админа
+      if (webmasterFilter) {
+        query += ` AND users.id = $3 `;
+        countQuery += ` AND users.id = $1 `;
+        params.push(webmasterFilter);
+        countParams.push(webmasterFilter);
+      }
+      if (amountFilter) {
+        query += webmasterFilter ? ` AND requests.amount = $4` : ` AND requests.amount = $3`;
+        countQuery += webmasterFilter ? ` AND requests.amount = $2` : ` AND requests.amount = $1`;
+        params.push(amountFilter);
+        countParams.push(amountFilter);
+      }
+      // Фильтрация по дате
+      if (startDate) {
+        query += ` AND expenses.created_at >= $${params.length + 1}`;
+        countQuery += ` AND expenses.created_at >= $${countParams.length + 1}`;
+        params.push(startDate);
+        countParams.push(startDate);
+      }
+      if (endDate) {
+        query += ` AND expenses.created_at <= $${params.length + 1}`;
+        countQuery += ` AND expenses.created_at <= $${countParams.length + 1}`;
+        params.push(endDate);
+        countParams.push(endDate);
+      }
+
+      query += ` ORDER BY ${sortByField} ${sortOrder} LIMIT $1 OFFSET $2;`;
+
     } else if (userRole === 'team_leader' || userRole === 'user') {
       query = `
         SELECT expenses.*, requests.amount, requests.link, users.username 
@@ -355,17 +390,46 @@ app.get('/api/expenses', async (req, res) => {
         JOIN requests ON expenses.request_id = requests.id
         JOIN users ON expenses.user_id = users.id
         WHERE users.team_id = $3
-        ORDER BY ${sortByField} ${sortOrder}
-        LIMIT $1 OFFSET $2;
       `;
       countQuery = `
         SELECT COUNT(*) FROM expenses
         JOIN requests ON expenses.request_id = requests.id
         JOIN users ON expenses.user_id = users.id
-        WHERE users.team_id = $1;
+        WHERE users.team_id = $1
       `;
+      
       params.push(teamId);
       countParams.push(teamId);
+      
+      // Добавляем фильтры для команды
+      if (webmasterFilter) {
+        query += ` AND users.id = $4 `;
+        countQuery += ` AND users.id = $2 `;
+        params.push(webmasterFilter);
+        countParams.push(webmasterFilter);
+      }
+      if (amountFilter) {
+        query += webmasterFilter ? ` AND requests.amount = $5` : ` AND requests.amount = $4`;
+        countQuery += webmasterFilter ? ` AND requests.amount = $3` : ` AND requests.amount = $2`;
+        params.push(amountFilter);
+        countParams.push(amountFilter);
+      }
+      // Фильтрация по дате
+      if (startDate) {
+        query += ` AND expenses.created_at >= $${params.length + 1}`;
+        countQuery += ` AND expenses.created_at >= $${countParams.length + 1}`;
+        params.push(startDate);
+        countParams.push(startDate);
+      }
+      if (endDate) {
+        query += ` AND expenses.created_at <= $${params.length + 1}`;
+        countQuery += ` AND expenses.created_at <= $${countParams.length + 1}`;
+        params.push(endDate);
+        countParams.push(endDate);
+      }
+
+      query += ` ORDER BY ${sortByField} ${sortOrder} LIMIT $1 OFFSET $2;`;
+
     } else {
       return res.status(403).json({ error: 'Access denied' });
     }
@@ -381,7 +445,131 @@ app.get('/api/expenses', async (req, res) => {
   }
 });
 
+
 //End expenses
+
+
+//Profile page
+app.get('/api/profile', async (req, res) => {
+  try {
+      const userId = req.session.user_id; // Assuming session contains user_id
+      const userProfileQuery = `
+          SELECT username, email 
+          FROM users 
+          WHERE id = $1
+      `;
+
+      const result = await pool.query(userProfileQuery, [userId]);
+      const user = result.rows[0];
+
+      if (user) {
+          res.json(user); // Send back username and email
+      } else {
+          res.status(404).json({ message: 'User not found' });
+      }
+  } catch (error) {
+      console.error('Error fetching profile:', error);
+      res.status(500).json({ message: 'Server error' });
+  }
+});
+
+app.post('/api/profile/update', async (req, res) => {
+  const { username, email, password } = req.body;
+  const userId = req.session.user_id; // Assuming session contains user_id
+
+  try {
+      let updateProfileQuery;
+      const queryParams = [username, email, userId];
+
+      // If the password is provided, include it in the update
+      if (password) {
+          const hashedPassword = await bcrypt.hash(password, 10);
+          updateProfileQuery = `
+              UPDATE users
+              SET username = $1, email = $2, password = $3
+              WHERE id = $4
+          `;
+          queryParams.splice(2, 0, hashedPassword); // Insert hashed password at index 2
+      } else {
+          updateProfileQuery = `
+              UPDATE users
+              SET username = $1, email = $2
+              WHERE id = $3
+          `;
+      }
+
+      await pool.query(updateProfileQuery, queryParams);
+
+      res.json({ success: true, message: 'Profile updated successfully' });
+  } catch (error) {
+      console.error('Error updating profile:', error);
+      res.status(500).json({ success: false, message: 'Failed to update profile' });
+  }
+});
+
+//end of profile page
+
+
+//Product Page
+
+
+// Получение всех продуктов
+app.get('/api/products', async (req, res) => {
+  try {
+    const result = await pool.query('SELECT * FROM products');
+    res.json(result.rows);
+  } catch (error) {
+    console.error('Error fetching products:', error);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// Добавление нового продукта
+app.post('/api/products', async (req, res) => {
+  const { name, description, country, payout, capacity, approvalRate, image } = req.body;
+  try {
+    const result = await pool.query(
+      'INSERT INTO products (name, description, country, payout, capacity, approvalRate, image) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *',
+      [name, description, country, payout, capacity, approvalRate, image]
+    );
+    res.json(result.rows[0]);
+  } catch (error) {
+    console.error('Error adding product:', error);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// Обновление продукта
+app.put('/api/products/:id', async (req, res) => {
+  const { id } = req.params;
+  const { name, description, country, payout, capacity, approvalRate, image } = req.body;
+  try {
+    const result = await pool.query(
+      'UPDATE products SET name = $1, description = $2, country = $3, payout = $4, capacity = $5, approvalRate = $6, image = $7 WHERE id = $8 RETURNING *',
+      [name, description, country, payout, capacity, approvalRate, image, id]
+    );
+    res.json(result.rows[0]);
+  } catch (error) {
+    console.error('Error updating product:', error);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// Удаление продукта
+app.delete('/api/products/:id', async (req, res) => {
+  const { id } = req.params;
+  try {
+    await pool.query('DELETE FROM products WHERE id = $1', [id]);
+    res.json({ message: 'Product deleted successfully' });
+  } catch (error) {
+    console.error('Error deleting product:', error);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+
+
+//end of product page
 
 
 
