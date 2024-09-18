@@ -315,15 +315,15 @@ app.get('/api/expenses', async (req, res) => {
   const teamId = req.session.user.team_id;
   const limit = parseInt(req.query.limit) || 10;  
   const offset = parseInt(req.query.offset) || 0;  
-  const sortBy = req.query.sortBy || 'created_at';  // Поле для сортировки (по умолчанию по дате создания)
-  const sortOrder = req.query.sortOrder === 'desc' ? 'DESC' : 'ASC';  // Порядок сортировки
+  const sortBy = req.query.sortBy || 'created_at';
+  const sortOrder = req.query.sortOrder === 'desc' ? 'DESC' : 'ASC';
 
-  const webmasterFilter = req.query.webmaster || null;  // Фильтр по вебмастеру (ID пользователя)
-  const amountFilter = req.query.amount || null;  // Фильтр по сумме расходов
-  const startDate = req.query.startDate || null;  // Начальная дата для фильтрации
-  const endDate = req.query.endDate || null;  // Конечная дата для фильтрации
+  const webmasterFilter = req.query.webmaster || null;
+  const amountFilter = req.query.amount || null;
+  const startDate = req.query.startDate || null;
+  const endDate = req.query.endDate || null;
+  const teamFilter = req.query.team || null;
 
-  // Мапинг поля сортировки для указания правильной таблицы
   const validSortFields = {
     'created_at': 'expenses.created_at',
     'amount': 'expenses.amount',
@@ -331,13 +331,15 @@ app.get('/api/expenses', async (req, res) => {
     'team_name': 'teams.name',
   };
 
-  const sortByField = validSortFields[sortBy] || 'expenses.created_at';  // Защита от некорректных значений
+  const sortByField = validSortFields[sortBy] || 'expenses.created_at';
 
   try {
     let query = '';
     let params = [limit, offset];
     let countQuery = '';
     let countParams = [];
+
+    let paramIndex = params.length + 1; // Начинаем с индекса, который будет следующим
 
     if (userRole === 'admin') {
       query = `
@@ -356,31 +358,40 @@ app.get('/api/expenses', async (req, res) => {
         WHERE 1=1
       `;
       
-      // Добавляем фильтры для админа
       if (webmasterFilter) {
-        query += ` AND users.id = $3 `;
-        countQuery += ` AND users.id = $1 `;
+        query += ` AND users.id = $${paramIndex}`;
+        countQuery += ` AND users.id = $${paramIndex - 2}`; // потому что offset и limit исключаются в countParams
         params.push(webmasterFilter);
         countParams.push(webmasterFilter);
+        paramIndex++;
       }
       if (amountFilter) {
-        query += webmasterFilter ? ` AND requests.amount = $4` : ` AND requests.amount = $3`;
-        countQuery += webmasterFilter ? ` AND requests.amount = $2` : ` AND requests.amount = $1`;
+        query += ` AND requests.amount = $${paramIndex}`;
+        countQuery += ` AND requests.amount = $${paramIndex - 2}`;
         params.push(amountFilter);
         countParams.push(amountFilter);
+        paramIndex++;
       }
-      // Фильтрация по дате
+      if (teamFilter) {
+        query += ` AND teams.id = $${paramIndex}`;
+        countQuery += ` AND teams.id = $${paramIndex - 2}`;
+        params.push(teamFilter);
+        countParams.push(teamFilter);
+        paramIndex++;
+      }
       if (startDate) {
-        query += ` AND expenses.created_at >= $${params.length + 1}`;
-        countQuery += ` AND expenses.created_at >= $${countParams.length + 1}`;
+        query += ` AND expenses.created_at >= $${paramIndex}`;
+        countQuery += ` AND expenses.created_at >= $${paramIndex - 2}`;
         params.push(startDate);
         countParams.push(startDate);
+        paramIndex++;
       }
       if (endDate) {
-        query += ` AND expenses.created_at <= $${params.length + 1}`;
-        countQuery += ` AND expenses.created_at <= $${countParams.length + 1}`;
+        query += ` AND expenses.created_at <= $${paramIndex}`;
+        countQuery += ` AND expenses.created_at <= $${paramIndex - 2}`;
         params.push(endDate);
         countParams.push(endDate);
+        paramIndex++;
       }
 
       query += ` ORDER BY ${sortByField} ${sortOrder} LIMIT $1 OFFSET $2;`;
@@ -391,7 +402,7 @@ app.get('/api/expenses', async (req, res) => {
         FROM expenses
         JOIN requests ON expenses.request_id = requests.id
         JOIN users ON expenses.user_id = users.id
-        WHERE users.team_id = $3
+        WHERE users.team_id = $${paramIndex}
       `;
       countQuery = `
         SELECT COUNT(*) FROM expenses
@@ -402,32 +413,35 @@ app.get('/api/expenses', async (req, res) => {
       
       params.push(teamId);
       countParams.push(teamId);
-      
-      // Добавляем фильтры для команды
+      paramIndex++;
+
       if (webmasterFilter) {
-        query += ` AND users.id = $4 `;
-        countQuery += ` AND users.id = $2 `;
+        query += ` AND users.id = $${paramIndex}`;
+        countQuery += ` AND users.id = $${paramIndex - 1}`;
         params.push(webmasterFilter);
         countParams.push(webmasterFilter);
+        paramIndex++;
       }
       if (amountFilter) {
-        query += webmasterFilter ? ` AND requests.amount = $5` : ` AND requests.amount = $4`;
-        countQuery += webmasterFilter ? ` AND requests.amount = $3` : ` AND requests.amount = $2`;
+        query += ` AND requests.amount = $${paramIndex}`;
+        countQuery += ` AND requests.amount = $${paramIndex - 1}`;
         params.push(amountFilter);
         countParams.push(amountFilter);
+        paramIndex++;
       }
-      // Фильтрация по дате
       if (startDate) {
-        query += ` AND expenses.created_at >= $${params.length + 1}`;
-        countQuery += ` AND expenses.created_at >= $${countParams.length + 1}`;
+        query += ` AND expenses.created_at >= $${paramIndex}`;
+        countQuery += ` AND expenses.created_at >= $${paramIndex - 1}`;
         params.push(startDate);
         countParams.push(startDate);
+        paramIndex++;
       }
       if (endDate) {
-        query += ` AND expenses.created_at <= $${params.length + 1}`;
-        countQuery += ` AND expenses.created_at <= $${countParams.length + 1}`;
+        query += ` AND expenses.created_at <= $${paramIndex}`;
+        countQuery += ` AND expenses.created_at <= $${paramIndex - 1}`;
         params.push(endDate);
         countParams.push(endDate);
+        paramIndex++;
       }
 
       query += ` ORDER BY ${sortByField} ${sortOrder} LIMIT $1 OFFSET $2;`;
@@ -443,6 +457,17 @@ app.get('/api/expenses', async (req, res) => {
     res.json({ expenses: result.rows, totalItems });
   } catch (error) {
     console.error('Ошибка при получении расходов:', error);
+    res.status(500).json({ message: 'Ошибка сервера' });
+  }
+});
+
+
+app.get('/api/teams', async (req, res) => {
+  try {
+    const result = await pool.query('SELECT id, name FROM teams');
+    res.json({ teams: result.rows });
+  } catch (error) {
+    console.error('Ошибка при получении команд:', error);
     res.status(500).json({ message: 'Ошибка сервера' });
   }
 });
