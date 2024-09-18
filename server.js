@@ -8,6 +8,8 @@ const compression = require('compression');
 const app = express();
 const PORT = 5001;
 require('dotenv').config();
+const multer = require('multer');
+const path = require('path');
 
 // Настройки для базы данных
 const dbUser = process.env.DB_USER;
@@ -81,7 +83,7 @@ app.post('/api/login', async (req, res) => {
     }
 
     // Сохраняем данные пользователя в сессии
-    req.session.user = { id: user.id, role: user.role, email: user.email, team_id: user.team_id };
+    req.session.user = { id: user.id, name: username, role: user.role, email: user.email, team_id: user.team_id };
     
     res.json({ message: 'Login successful' });
   } catch (err) {
@@ -452,7 +454,7 @@ app.get('/api/expenses', async (req, res) => {
 //Profile page
 app.get('/api/profile', async (req, res) => {
   try {
-      const userId = req.session.user_id; // Assuming session contains user_id
+      const userId = req.session.user.id; // Assuming session contains user_id
       const userProfileQuery = `
           SELECT username, email 
           FROM users 
@@ -475,7 +477,7 @@ app.get('/api/profile', async (req, res) => {
 
 app.post('/api/profile/update', async (req, res) => {
   const { username, email, password } = req.body;
-  const userId = req.session.user_id; // Assuming session contains user_id
+  const userId = req.session.user.id; // Assuming session contains user_id
 
   try {
       let updateProfileQuery;
@@ -526,11 +528,11 @@ app.get('/api/products', async (req, res) => {
 
 // Добавление нового продукта
 app.post('/api/products', async (req, res) => {
-  const { name, description, country, payout, capacity, approvalRate, image } = req.body;
+  const { name, description, country, payout, capacity, approval_rate, image_url } = req.body;
   try {
     const result = await pool.query(
-      'INSERT INTO products (name, description, country, payout, capacity, approvalRate, image) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *',
-      [name, description, country, payout, capacity, approvalRate, image]
+      'INSERT INTO products (name, description, country, payout, capacity, approval_rate, image_url) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *',
+      [name, description, country, payout, capacity, approval_rate, image_url]
     );
     res.json(result.rows[0]);
   } catch (error) {
@@ -542,11 +544,11 @@ app.post('/api/products', async (req, res) => {
 // Обновление продукта
 app.put('/api/products/:id', async (req, res) => {
   const { id } = req.params;
-  const { name, description, country, payout, capacity, approvalRate, image } = req.body;
+  const { name, description, country, payout, capacity, approval_rate, image_url } = req.body;
   try {
     const result = await pool.query(
-      'UPDATE products SET name = $1, description = $2, country = $3, payout = $4, capacity = $5, approvalRate = $6, image = $7 WHERE id = $8 RETURNING *',
-      [name, description, country, payout, capacity, approvalRate, image, id]
+      'UPDATE products SET name = $1, description = $2, country = $3, payout = $4, capacity = $5, approval_rate = $6, image_url = $7 WHERE id = $8 RETURNING *',
+      [name, description, country, payout, capacity, approval_rate, image_url, id]
     );
     res.json(result.rows[0]);
   } catch (error) {
