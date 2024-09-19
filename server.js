@@ -605,13 +605,17 @@ app.delete('/api/products/:id', async (req, res) => {
 const verificationCodes = {};
 
 app.post('/api/admin/add-user', async (req, res) => {
-  const { username, email, password, team_id } = req.body;
+  const { email } = req.body;
   const code = Math.floor(1000 + Math.random() * 9000); // Generate 4-digit code
-
-  // Store the verification code with email
-  verificationCodes[email] = code;
+  const expirationTime = new Date(Date.now() + 10 * 60 * 1000); // Код истекает через 10 минут
 
   try {
+    // Сохраняем код и срок верификации
+    await pool.query(
+      'INSERT INTO verification_codes (email, verification_code, expiration_time) VALUES ($1, $2, $3)',
+      [email, code, expirationTime]
+    );
+
     // Send verification code via email
     const transporter = nodemailer.createTransport({
       service: 'gmail',
@@ -620,13 +624,12 @@ app.post('/api/admin/add-user', async (req, res) => {
         pass: 'yrsz rjti qvxb jlhr',
       },
     });
-    
 
     const mailOptions = {
       from: 'confirmation@gmail.com',
       to: email,
       subject: 'Your verification code',
-      text: `Your verification code is ${code}`,
+      text: `Your verification code is ${code}. It will expire in 10 minutes.`,
     };
 
     await transporter.sendMail(mailOptions);
@@ -637,36 +640,46 @@ app.post('/api/admin/add-user', async (req, res) => {
     res.status(500).json({ success: false, message: 'Failed to send verification email' });
   }
 });
-
 app.post('/api/admin/verify-code', async (req, res) => {
   const { email, verificationCode, username, password, team_id } = req.body;
-  console.log(req.body);
 
-  if (verificationCodes[email] && verificationCodes[email] === parseInt(verificationCode, 10)) {
-    const { username, password, team_id } = req.body; // Получаем team_id
-
-    try {
-      if (!password) {
-        return res.status(400).json({ success: false, message: 'Password is required' });
-      }
-      const hashedPassword = await bcrypt.hash(password, 10);  // Хешируем пароль
-      await pool.query(
-        'INSERT INTO users (username, email, password, role, team_id) VALUES ($1, $2, $3, $4, $5)',
-        [username, email, hashedPassword, 'user', team_id] // Добавляем team_id
-      );
-
-      // Удаляем временный код из памяти
-      delete verificationCodes[email];
-
-      res.json({ success: true });
-    } catch (error) {
-      console.error('Error adding user:', error);
-      res.status(500).json({ success: false, message: 'Failed to add user' });
+  try {
+    const result = await pool.query(
+      'SELECT verification_code, expiration_time FROM verification_codes WHERE email = $1',
+      [email]
+    );
+    
+    if (result.rows.length === 0) {
+      return res.status(400).json({ success: false, message: 'Verification code not found' });
     }
-  } else {
-    res.status(400).json({ success: false, message: 'Invalid verification code' });
+
+    const { verification_code, expiration_time } = result.rows[0];
+
+    if (new Date() > expiration_time) {
+      return res.status(400).json({ success: false, message: 'Verification code expired' });
+    }
+
+    if (verification_code !== verificationCode) {
+      return res.status(400).json({ success: false, message: 'Invalid verification code' });
+    }
+
+    // Если код правильный и не просрочен, создаем пользователя
+    const hashedPassword = await bcrypt.hash(password, 10);
+    await pool.query(
+      'INSERT INTO users (username, email, password, role, team_id) VALUES ($1, $2, $3, $4, $5)',
+      [username, email, hashedPassword, 'user', team_id]
+    );
+
+    // Удаляем запись с кодом после успешной верификации
+    await pool.query('DELETE FROM verification_codes WHERE email = $1', [email]);
+
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Error verifying code:', error);
+    res.status(500).json({ success: false, message: 'Failed to verify code' });
   }
 });
+
 
 //end of adding user
 
