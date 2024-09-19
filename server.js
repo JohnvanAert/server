@@ -335,11 +335,11 @@ app.get('/api/expenses', async (req, res) => {
 
   try {
     let query = '';
-    let params = [limit, offset];
+    let params = [];
     let countQuery = '';
     let countParams = [];
 
-    let paramIndex = params.length + 1; // Начинаем с индекса, который будет следующим
+    let paramIndex = 1; // Начинаем с индекса 1
 
     if (userRole === 'admin') {
       query = `
@@ -360,41 +360,43 @@ app.get('/api/expenses', async (req, res) => {
       
       if (webmasterFilter) {
         query += ` AND users.id = $${paramIndex}`;
-        countQuery += ` AND users.id = $${paramIndex - 2}`; // потому что offset и limit исключаются в countParams
+        countQuery += ` AND users.id = $${paramIndex}`;
         params.push(webmasterFilter);
         countParams.push(webmasterFilter);
         paramIndex++;
       }
       if (amountFilter) {
         query += ` AND requests.amount = $${paramIndex}`;
-        countQuery += ` AND requests.amount = $${paramIndex - 2}`;
+        countQuery += ` AND requests.amount = $${paramIndex}`;
         params.push(amountFilter);
         countParams.push(amountFilter);
         paramIndex++;
       }
       if (teamFilter) {
         query += ` AND teams.id = $${paramIndex}`;
-        countQuery += ` AND teams.id = $${paramIndex - 2}`;
+        countQuery += ` AND teams.id = $${paramIndex}`;
         params.push(teamFilter);
         countParams.push(teamFilter);
         paramIndex++;
       }
       if (startDate) {
         query += ` AND expenses.created_at >= $${paramIndex}`;
-        countQuery += ` AND expenses.created_at >= $${paramIndex - 2}`;
+        countQuery += ` AND expenses.created_at >= $${paramIndex}`;
         params.push(startDate);
         countParams.push(startDate);
         paramIndex++;
       }
       if (endDate) {
         query += ` AND expenses.created_at <= $${paramIndex}`;
-        countQuery += ` AND expenses.created_at <= $${paramIndex - 2}`;
+        countQuery += ` AND expenses.created_at <= $${paramIndex}`;
         params.push(endDate);
         countParams.push(endDate);
         paramIndex++;
       }
 
-      query += ` ORDER BY ${sortByField} ${sortOrder} LIMIT $1 OFFSET $2;`;
+      // Добавляем LIMIT и OFFSET в конец
+      query += ` ORDER BY ${sortByField} ${sortOrder} LIMIT $${paramIndex} OFFSET $${paramIndex + 1};`;
+      params.push(limit, offset);
 
     } else if (userRole === 'team_leader' || userRole === 'user') {
       query = `
@@ -408,7 +410,7 @@ app.get('/api/expenses', async (req, res) => {
         SELECT COUNT(*) FROM expenses
         JOIN requests ON expenses.request_id = requests.id
         JOIN users ON expenses.user_id = users.id
-        WHERE users.team_id = $1
+        WHERE users.team_id = $${paramIndex}
       `;
       
       params.push(teamId);
@@ -417,34 +419,36 @@ app.get('/api/expenses', async (req, res) => {
 
       if (webmasterFilter) {
         query += ` AND users.id = $${paramIndex}`;
-        countQuery += ` AND users.id = $${paramIndex - 1}`;
+        countQuery += ` AND users.id = $${paramIndex}`;
         params.push(webmasterFilter);
         countParams.push(webmasterFilter);
         paramIndex++;
       }
       if (amountFilter) {
         query += ` AND requests.amount = $${paramIndex}`;
-        countQuery += ` AND requests.amount = $${paramIndex - 1}`;
+        countQuery += ` AND requests.amount = $${paramIndex}`;
         params.push(amountFilter);
         countParams.push(amountFilter);
         paramIndex++;
       }
       if (startDate) {
         query += ` AND expenses.created_at >= $${paramIndex}`;
-        countQuery += ` AND expenses.created_at >= $${paramIndex - 1}`;
+        countQuery += ` AND expenses.created_at >= $${paramIndex}`;
         params.push(startDate);
         countParams.push(startDate);
         paramIndex++;
       }
       if (endDate) {
         query += ` AND expenses.created_at <= $${paramIndex}`;
-        countQuery += ` AND expenses.created_at <= $${paramIndex - 1}`;
+        countQuery += ` AND expenses.created_at <= $${paramIndex}`;
         params.push(endDate);
         countParams.push(endDate);
         paramIndex++;
       }
 
-      query += ` ORDER BY ${sortByField} ${sortOrder} LIMIT $1 OFFSET $2;`;
+      // Добавляем LIMIT и OFFSET в конец
+      query += ` ORDER BY ${sortByField} ${sortOrder} LIMIT $${paramIndex} OFFSET $${paramIndex + 1};`;
+      params.push(limit, offset);
 
     } else {
       return res.status(403).json({ error: 'Access denied' });
