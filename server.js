@@ -10,7 +10,7 @@ const PORT = 5001;
 require('dotenv').config();
 const multer = require('multer');
 const path = require('path');
-
+const nodemailer = require('nodemailer');
 // Настройки для базы данных
 const dbUser = process.env.DB_USER;
 const db = process.env.DB;
@@ -598,10 +598,77 @@ app.delete('/api/products/:id', async (req, res) => {
   }
 });
 
-
-
 //end of product page
 
+
+//Adding User
+const verificationCodes = {};
+
+app.post('/api/admin/add-user', async (req, res) => {
+  const { username, email, password, team_id } = req.body;
+  const code = Math.floor(1000 + Math.random() * 9000); // Generate 4-digit code
+
+  // Store the verification code with email
+  verificationCodes[email] = code;
+
+  try {
+    // Send verification code via email
+    const transporter = nodemailer.createTransport({
+      service: 'gmail',
+      auth: {
+        user: 'johnvanaert89@gmail.com',
+        pass: 'yrsz rjti qvxb jlhr',
+      },
+    });
+    
+
+    const mailOptions = {
+      from: 'confirmation@gmail.com',
+      to: email,
+      subject: 'Your verification code',
+      text: `Your verification code is ${code}`,
+    };
+
+    await transporter.sendMail(mailOptions);
+
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Error sending email:', error);
+    res.status(500).json({ success: false, message: 'Failed to send verification email' });
+  }
+});
+
+app.post('/api/admin/verify-code', async (req, res) => {
+  const { email, verificationCode, username, password, team_id } = req.body;
+  console.log(req.body);
+
+  if (verificationCodes[email] && verificationCodes[email] === parseInt(verificationCode, 10)) {
+    const { username, password, team_id } = req.body; // Получаем team_id
+
+    try {
+      if (!password) {
+        return res.status(400).json({ success: false, message: 'Password is required' });
+      }
+      const hashedPassword = await bcrypt.hash(password, 10);  // Хешируем пароль
+      await pool.query(
+        'INSERT INTO users (username, email, password, role, team_id) VALUES ($1, $2, $3, $4, $5)',
+        [username, email, hashedPassword, 'user', team_id] // Добавляем team_id
+      );
+
+      // Удаляем временный код из памяти
+      delete verificationCodes[email];
+
+      res.json({ success: true });
+    } catch (error) {
+      console.error('Error adding user:', error);
+      res.status(500).json({ success: false, message: 'Failed to add user' });
+    }
+  } else {
+    res.status(400).json({ success: false, message: 'Invalid verification code' });
+  }
+});
+
+//end of adding user
 
 
 
