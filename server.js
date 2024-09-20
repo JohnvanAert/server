@@ -17,6 +17,8 @@ const db = process.env.DB;
 const host = process.env.HOST;
 const dbPort = process.env.DB_PORT;
 const dbPassword = process.env.DB_PASSWORD;
+const mailUser = process.env.MAIL_USER
+const mailPass = process.env.MAIL_PASS
 
 // Настройка пула подключений к PostgreSQL
 const pool = new Pool({
@@ -62,6 +64,8 @@ const authenticateSession = (req, res, next) => {
   }
 };
 
+//LoginPage
+
 // Маршрут для логина (аутентификация)
 app.post('/api/login', async (req, res) => {
   const { username, password } = req.body;
@@ -91,6 +95,85 @@ app.post('/api/login', async (req, res) => {
   }
 });
 
+
+// Маршрут для отправки кода сброса пароля
+app.post('/api/forgot-password', async (req, res) => {
+  const { email } = req.body;
+  
+  try {
+    // Поиск пользователя по email
+    const userResult = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
+    if (userResult.rows.length === 0) {
+      return res.status(400).json({ message: 'User with this email not found' });
+    }
+
+    // Генерация кода сброса пароля (или ссылки с токеном)
+    const resetCode = Math.floor(100000 + Math.random() * 900000); // 6-значный код
+    const expirationTime = new Date(Date.now() + 15 * 60 * 1000); // 15 минут на сброс
+
+    // Сохранение кода в базе данных
+    await pool.query(
+      'INSERT INTO verification_codes (email, verification_code, expiration_time) VALUES ($1, $2, $3)',
+      [email, resetCode, expirationTime]
+    );
+
+    // Отправка кода на почту
+    const transporter = nodemailer.createTransport({
+      service: 'gmail',
+      auth: {
+        user: mailUser,
+        pass: mailPass,
+      },
+    });
+
+    const mailOptions = {
+      from: mailUser,
+      to: email,
+      subject: 'Password Reset Code' ,
+      text: `Your password reset code is: ${resetCode}. It will expire in 15 minutes.`,
+    };
+
+    await transporter.sendMail(mailOptions);
+
+    res.json({ success: true, message: 'Reset code sent to your email.' });
+  } catch (error) {
+    console.error('Error sending password reset code:', error);
+    res.status(500).json({ success: false, message: 'Failed to send reset code.' });
+  }
+});
+
+// Маршрут для сброса пароля
+app.post('/api/reset-password', async (req, res) => {
+  const { email, resetCode, newPassword } = req.body;
+
+  try {
+    // Проверяем код сброса
+    const codeResult = await pool.query(
+      'SELECT * FROM verification_codes WHERE email = $1 AND verification_code = $2 AND expiration_time > NOW()',
+      [email, resetCode]
+    );
+    
+    if (codeResult.rows.length === 0) {
+      return res.status(400).json({ message: 'Invalid or expired reset code' });
+    }
+
+    // Хешируем новый пароль
+    const hashedPassword = bcrypt.hashSync(newPassword, 10);
+
+    // Обновляем пароль пользователя
+    await pool.query('UPDATE users SET password = $1 WHERE email = $2', [hashedPassword, email]);
+
+    // Удаляем использованный код сброса
+    await pool.query('DELETE FROM verification_codes WHERE email = $1', [email]);
+
+    res.json({ success: true, message: 'Password reset successful' });
+  } catch (error) {
+    console.error('Error resetting password:', error);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+//end LoginPage
 
 
 // Маршрут для получения данных пользователя
@@ -538,6 +621,7 @@ app.post('/api/profile/update', async (req, res) => {
   }
 });
 
+
 //end of profile page
 
 
@@ -605,23 +689,37 @@ app.delete('/api/products/:id', async (req, res) => {
 const verificationCodes = {};
 
 app.post('/api/admin/add-user', async (req, res) => {
-  const { email } = req.body;
-  const code = Math.floor(1000 + Math.random() * 9000); // Generate 4-digit code
+  const { username, email, password, team_id } = req.body;
+  const code = Math.floor(1000 + Math.random() * 9000); // Генерация 4-значного кода
   const expirationTime = new Date(Date.now() + 10 * 60 * 1000); // Код истекает через 10 минут
 
   try {
-    // Сохраняем код и срок верификации
+    // Проверяем, существует ли пользователь с таким email или именем
+    const existingUser = await pool.query(
+      'SELECT * FROM users WHERE email = $1 OR username = $2',
+      [email, username]
+    );
+
+    // Если пользователь уже существует, возвращаем ошибку
+    if (existingUser.rows.length > 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Пользователь с таким email или именем уже существует',
+      });
+    }
+
+    // Сохраняем код верификации и время истечения
     await pool.query(
       'INSERT INTO verification_codes (email, verification_code, expiration_time) VALUES ($1, $2, $3)',
       [email, code, expirationTime]
     );
 
-    // Send verification code via email
+    // Отправляем код верификации по email
     const transporter = nodemailer.createTransport({
       service: 'gmail',
       auth: {
-        user: 'johnvanaert89@gmail.com',
-        pass: 'yrsz rjti qvxb jlhr',
+        user: mailUser,
+        pass: mailPass,
       },
     });
 
@@ -629,7 +727,7 @@ app.post('/api/admin/add-user', async (req, res) => {
       from: 'confirmation@gmail.com',
       to: email,
       subject: 'Your verification code',
-      text: `Your verification code is ${code}. It will expire in 10 minutes.`,
+      text: `Ваш код подтверждения: ${code}. Он истекает через 10 минут.`,
     };
 
     await transporter.sendMail(mailOptions);
@@ -637,9 +735,10 @@ app.post('/api/admin/add-user', async (req, res) => {
     res.json({ success: true });
   } catch (error) {
     console.error('Error sending email:', error);
-    res.status(500).json({ success: false, message: 'Failed to send verification email' });
+    res.status(500).json({ success: false, message: 'Не удалось отправить код подтверждения' });
   }
 });
+
 app.post('/api/admin/verify-code', async (req, res) => {
   const { email, verificationCode, username, password, team_id } = req.body;
 
