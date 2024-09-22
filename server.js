@@ -20,6 +20,26 @@ const dbPassword = process.env.DB_PASSWORD;
 const mailUser = process.env.MAIL_USER
 const mailPass = process.env.MAIL_PASS
 
+
+// Определяем директорию для загрузки файлов
+const storage = multer.diskStorage({
+  destination: function (req, file, cb) {
+    cb(null, 'uploads/images'); // Указываем путь для сохранения изображений
+  },
+  filename: function (req, file, cb) {
+    // Генерация уникального имени файла, сохраняя оригинальное расширение
+    const ext = path.extname(file.originalname);
+    const filename = `${Date.now()}-${Math.round(Math.random() * 1E9)}${ext}`;
+    cb(null, filename);
+  }
+});
+
+
+const upload = multer({ storage: storage });
+// Настройка статической директории для доступа к изображениям
+app.use('/uploads/images', express.static('uploads/images'));
+
+
 // Настройка пула подключений к PostgreSQL
 const pool = new Pool({
   user: dbUser,
@@ -57,7 +77,6 @@ app.use(session({
 // Middleware для проверки авторизации через сессии
 const authenticateSession = (req, res, next) => {
   if (req.session.user) {
-    console.log("Session authenticated for user:", req.session.user);
     next();
   } else {
     res.status(401).json({ message: 'Not authorized' });
@@ -587,45 +606,146 @@ app.get('/api/profile', async (req, res) => {
   }
 });
 
-app.post('/api/profile/update', async (req, res) => {
+app.post('/api/profile/update', upload.single('avatar'), async (req, res) => {
   const { username, email, password } = req.body;
-  const userId = req.session.user.id; // Assuming session contains user_id
+  const userId = req.session.user.id;
+  let imageUrl = req.file ? `/uploads/${req.file.filename}` : null; // URL для аватарки
 
   try {
-      let updateProfileQuery;
-      const queryParams = [username, email, userId];
+    let updateProfileQuery;
+    let queryParams = [username, email, userId];
 
-      // If the password is provided, include it in the update
+    // Если аватарка была загружена
+    if (imageUrl) {
+      // Если пароль предоставлен, обновляем и его
       if (password) {
-          const hashedPassword = await bcrypt.hash(password, 10);
-          updateProfileQuery = `
-              UPDATE users
-              SET username = $1, email = $2, password = $3
-              WHERE id = $4
-          `;
-          queryParams.splice(2, 0, hashedPassword); // Insert hashed password at index 2
+        const hashedPassword = await bcrypt.hash(password, 10);
+        updateProfileQuery = `
+          UPDATE users
+          SET username = $1, email = $2, password = $3, image = $4
+          WHERE id = $5
+        `;
+        queryParams = [username, email, hashedPassword, imageUrl, userId];
       } else {
-          updateProfileQuery = `
-              UPDATE users
-              SET username = $1, email = $2
-              WHERE id = $3
-          `;
+        updateProfileQuery = `
+          UPDATE users
+          SET username = $1, email = $2, image = $3
+          WHERE id = $4
+        `;
+        queryParams = [username, email, imageUrl, userId];
       }
+    } else {
+      // Если аватарка не загружена, оставляем только обновление других полей
+      if (password) {
+        const hashedPassword = await bcrypt.hash(password, 10);
+        updateProfileQuery = `
+          UPDATE users
+          SET username = $1, email = $2, password = $3
+          WHERE id = $4
+        `;
+        queryParams = [username, email, hashedPassword, userId];
+      } else {
+        updateProfileQuery = `
+          UPDATE users
+          SET username = $1, email = $2
+          WHERE id = $3
+        `;
+      }
+    }
 
-      await pool.query(updateProfileQuery, queryParams);
+    await pool.query(updateProfileQuery, queryParams);
 
-      res.json({ success: true, message: 'Profile updated successfully' });
+    res.json({ success: true, message: 'Profile updated successfully' });
   } catch (error) {
-      console.error('Error updating profile:', error);
-      res.status(500).json({ success: false, message: 'Failed to update profile' });
+    console.error('Error updating profile:', error);
+    res.status(500).json({ success: false, message: 'Failed to update profile' });
   }
 });
+
+
+// Route for sending the password reset code
+app.post('/api/forgot-password', async (req, res) => {
+  const { email } = req.body;
+
+  try {
+    // Find user by email
+    const userResult = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
+    if (userResult.rows.length === 0) {
+      return res.status(400).json({ message: 'User with this email not found' });
+    }
+
+    // Generate a 6-digit reset code
+    const resetCode = Math.floor(100000 + Math.random() * 900000); // 6-digit code
+    const expirationTime = new Date(Date.now() + 15 * 60 * 1000); // 15 minutes expiration
+
+    // Save the reset code in the database
+    await pool.query(
+      'INSERT INTO verification_codes (email, verification_code, expiration_time) VALUES ($1, $2, $3)',
+      [email, resetCode, expirationTime]
+    );
+
+    // Send the reset code via email
+    const transporter = nodemailer.createTransport({
+      service: 'gmail',
+      auth: {
+        user: mailUser,
+        pass: mailPass,
+      },
+    });
+
+    const mailOptions = {
+      from: mailUser,
+      to: email,
+      subject: 'Password Reset Code',
+      text: `Your password reset code is: ${resetCode}. It will expire in 15 minutes.`,
+    };
+
+    await transporter.sendMail(mailOptions);
+
+    res.json({ success: true, message: 'Reset code sent to your email.' });
+  } catch (error) {
+    console.error('Error sending password reset code:', error);
+    res.status(500).json({ success: false, message: 'Failed to send reset code.' });
+  }
+});
+// Route for verifying the reset code and updating the password
+app.post('/api/reset-password', async (req, res) => {
+  const { email, resetCode, newPassword } = req.body;
+
+  try {
+    // Check if the reset code is valid and not expired
+    const result = await pool.query(
+      'SELECT * FROM verification_codes WHERE email = $1 AND verification_code = $2 AND expiration_time > NOW()',
+      [email, resetCode]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(400).json({ message: 'Invalid or expired reset code.' });
+    }
+
+    // Hash the new password
+    const hashedPassword = await bcrypt.hash(newPassword, 10);
+
+    // Update the user's password in the database
+    await pool.query('UPDATE users SET password = $1 WHERE email = $2', [hashedPassword, email]);
+
+    // Optionally delete the reset code after successful password reset
+    await pool.query('DELETE FROM verification_codes WHERE email = $1', [email]);
+
+    res.json({ success: true, message: 'Password reset successfully.' });
+  } catch (error) {
+    console.error('Error resetting password:', error);
+    res.status(500).json({ success: false, message: 'Failed to reset password.' });
+  }
+});
+
 
 
 //end of profile page
 
 
 //Product Page
+
 
 
 // Получение всех продуктов
@@ -639,13 +759,15 @@ app.get('/api/products', async (req, res) => {
   }
 });
 
-// Добавление нового продукта
-app.post('/api/products', async (req, res) => {
-  const { name, description, country, payout, capacity, approval_rate, image_url } = req.body;
+// Маршрут для добавления продукта
+app.post('/api/products', upload.single('image'), async (req, res) => {
+  const { name, description, country, avgPayout, capacity, approvalRate } = req.body;
+  const image_url = req.file ? `/uploads/images/${req.file.filename}` : null;
+
   try {
     const result = await pool.query(
       'INSERT INTO products (name, description, country, payout, capacity, approval_rate, image_url) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *',
-      [name, description, country, payout, capacity, approval_rate, image_url]
+      [name, description, country, avgPayout, capacity, approvalRate, image_url]
     );
     res.json(result.rows[0]);
   } catch (error) {
@@ -654,10 +776,31 @@ app.post('/api/products', async (req, res) => {
   }
 });
 
-// Обновление продукта
-app.put('/api/products/:id', async (req, res) => {
+
+// Получение продукта по ID
+app.get('/api/products/:id', async (req, res) => {
   const { id } = req.params;
-  const { name, description, country, payout, capacity, approval_rate, image_url } = req.body;
+  try {
+    const result = await pool.query('SELECT * FROM products WHERE id = $1', [id]);
+    if (result.rows.length === 0) {
+      console.log('Продукт не найден'); // Логируем, если продукт не найден
+      return res.status(404).json({ message: 'Product not found' });
+    }
+    console.log('Продукт найден:', result.rows[0]); // Логируем найденный продукт
+    res.json(result.rows[0]);
+  } catch (error) {
+    console.error('Ошибка при получении продукта:', error); // Логируем ошибку
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+
+// Обновление продукта с поддержкой изменения изображения
+app.put('/api/products/:id', upload.single('image'), async (req, res) => {
+  const { id } = req.params;
+  const { name, description, country, payout, capacity, approval_rate } = req.body;
+  const image_url = req.file ? `/uploads/images/${req.file.filename}` : req.body.existingImage; // Используем загруженное изображение или старое
+
   try {
     const result = await pool.query(
       'UPDATE products SET name = $1, description = $2, country = $3, payout = $4, capacity = $5, approval_rate = $6, image_url = $7 WHERE id = $8 RETURNING *',
