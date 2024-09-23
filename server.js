@@ -215,10 +215,10 @@ app.get('/api/user', authenticateSession, async (req, res) => {
 //Получить таблицы с коммандами
 
 // Универсальный маршрут для получения данных команд
+// Универсальный маршрут для получения данных команд
 app.get('/teams', async (req, res, next) => {
-  // Проверка, что пользователь авторизован
   if (!req.session.user) {
-    return res.redirect('/unauthorized'); // Перенаправляем на маршрут /unauthorized
+    return res.redirect('/unauthorized');
   }
 
   const { id: userId, role, team_id } = req.session.user;
@@ -227,30 +227,25 @@ app.get('/teams', async (req, res, next) => {
     let query;
     let queryParams = [];
 
-    // Логика для администратора
     if (role === 'admin') {
       query = `
-        SELECT users.id, users.username AS name, users.role, teams.name AS team_name
-        FROM users
-        JOIN teams ON users.team_id = teams.id
+        SELECT teams.id AS team_id, teams.name AS team_name, users.id, users.username AS name, users.role
+        FROM teams
+        LEFT JOIN users ON users.team_id = teams.id
         ORDER BY teams.name, 
                  CASE WHEN users.role = 'team_leader' THEN 0 ELSE 1 END, 
                  users.id;
       `;
-    }
-    // Логика для тимлидера
-    else if (role === 'team_leader') {
+    } else if (role === 'team_leader') {
       query = `
-        SELECT users.id, users.username, users.role, teams.name 
-        FROM users
-        JOIN teams ON users.team_id = teams.id
+        SELECT teams.id AS team_id, teams.name AS team_name, users.id, users.username AS name, users.role
+        FROM teams
+        LEFT JOIN users ON users.team_id = teams.id
         WHERE teams.leader_id = $1
         ORDER BY users.role = 'team_leader' DESC, users.id ASC;
       `;
       queryParams = [userId];
-    }
-    // Логика для обычного пользователя
-    else if (role === 'user') {
+    } else if (role === 'user') {
       query = `
         SELECT users.id, users.username, users.role
         FROM users
@@ -262,7 +257,6 @@ app.get('/teams', async (req, res, next) => {
       return res.redirect('/unauthorized');
     }
 
-    // Выполняем запрос
     const result = await pool.query(query, queryParams);
     res.json(result.rows);
 
@@ -271,6 +265,7 @@ app.get('/teams', async (req, res, next) => {
     res.status(500).json({ error: 'Internal Server Error' });
   }
 });
+
 
 
 // Create a new team
@@ -290,6 +285,24 @@ app.post('/teams', async (req, res, next) => {
   }
 });
 
+
+// Маршрут для удаления команды
+app.delete('/teams/:id', async (req, res, next) => {
+  const { id } = req.params;
+
+  try {
+    // Удаляем команду по её ID
+    await pool.query('DELETE FROM teams WHERE id = $1', [id]);
+    
+    // Можно также удалить всех пользователей команды, если это нужно
+    // await pool.query('DELETE FROM users WHERE team_id = $1', [id]);
+
+    res.status(200).json({ message: 'Team deleted successfully' });
+  } catch (error) {
+    console.error('Error deleting team:', error);
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
 
 
 // конец получения таблицы
