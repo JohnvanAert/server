@@ -273,6 +273,24 @@ app.get('/teams', async (req, res, next) => {
 });
 
 
+// Create a new team
+app.post('/teams', async (req, res, next) => {
+  const { name } = req.body;
+
+  try {
+    // Insert the new team into the database
+    const result = await pool.query(
+      'INSERT INTO teams (name) VALUES ($1) RETURNING *',
+      [name]
+    );
+    res.status(201).json(result.rows[0]); // Send back the newly created team
+  } catch (error) {
+    console.error('Error adding team:', error);
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
+
+
 
 // конец получения таблицы
 
@@ -587,7 +605,7 @@ app.get('/api/profile', async (req, res) => {
   try {
       const userId = req.session.user.id; // Assuming session contains user_id
       const userProfileQuery = `
-          SELECT username, email 
+          SELECT username, email, image
           FROM users 
           WHERE id = $1
       `;
@@ -606,10 +624,10 @@ app.get('/api/profile', async (req, res) => {
   }
 });
 
-app.post('/api/profile/update', upload.single('avatar'), async (req, res) => {
+app.post('/api/profile/update', upload.single('image'), async (req, res) => {
   const { username, email, password } = req.body;
   const userId = req.session.user.id;
-  let imageUrl = req.file ? `/uploads/${req.file.filename}` : null; // URL для аватарки
+  let imageUrl = req.file ? `/uploads/images/${req.file.filename}` : null; // URL для аватарки
 
   try {
     let updateProfileQuery;
@@ -655,7 +673,8 @@ app.post('/api/profile/update', upload.single('avatar'), async (req, res) => {
 
     await pool.query(updateProfileQuery, queryParams);
 
-    res.json({ success: true, message: 'Profile updated successfully' });
+    // Возвращаем новый URL изображения
+    res.json({ success: true, message: 'Profile updated successfully', imageUrl });
   } catch (error) {
     console.error('Error updating profile:', error);
     res.status(500).json({ success: false, message: 'Failed to update profile' });
