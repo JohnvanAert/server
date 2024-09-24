@@ -33,9 +33,17 @@ const storage = multer.diskStorage({
     cb(null, filename);
   }
 });
+// Проверка MIME-типа для ограничения загрузки только изображений
+const fileFilter = (req, file, cb) => {
+  if (file.mimetype.startsWith('image/')) {
+    cb(null, true); // Разрешаем загрузку
+  } else {
+    cb(new Error('Only images are allowed!'), false); // Отклоняем загрузку
+  }
+};
 
 
-const upload = multer({ storage: storage });
+const upload = multer({ storage: storage, fileFilter });
 // Настройка статической директории для доступа к изображениям
 app.use('/uploads/images', express.static('uploads/images'));
 
@@ -303,6 +311,7 @@ app.delete('/teams/:id', async (req, res, next) => {
     res.status(500).json({ error: 'Internal Server Error' });
   }
 });
+
 
 
 // конец получения таблицы
@@ -638,6 +647,13 @@ app.get('/api/profile', async (req, res) => {
 });
 
 app.post('/api/profile/update', upload.single('image'), async (req, res) => {
+  if (err instanceof multer.MulterError) {
+    // Обрабатываем ошибки от multer
+    return res.status(400).json({ success: false, message: err.message });
+  } else if (err) {
+    // Обрабатываем ошибки, если MIME-тип неверный
+    return res.status(400).json({ success: false, message: err.message });
+  }
   const { username, email, password } = req.body;
   const userId = req.session.user.id;
   let imageUrl = req.file ? `/uploads/images/${req.file.filename}` : null; // URL для аватарки
