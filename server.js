@@ -17,9 +17,10 @@ const db = process.env.DB;
 const host = process.env.HOST;
 const dbPort = process.env.DB_PORT;
 const dbPassword = process.env.DB_PASSWORD;
-const mailUser = process.env.MAIL_USER
-const mailPass = process.env.MAIL_PASS
-
+const mailUser = process.env.MAIL_USER;
+const mailPass = process.env.MAIL_PASS;
+const LDapi = process.env.LDVX_API;
+const axios = require('axios');
 
 // Определяем директорию для загрузки файлов
 const storage = multer.diskStorage({
@@ -274,8 +275,6 @@ app.get('/teams', async (req, res, next) => {
   }
 });
 
-
-
 // Create a new team
 app.post('/teams', async (req, res, next) => {
   const { name } = req.body;
@@ -293,7 +292,6 @@ app.post('/teams', async (req, res, next) => {
   }
 });
 
-
 // Маршрут для удаления команды
 app.delete('/teams/:id', async (req, res, next) => {
   const { id } = req.params;
@@ -302,9 +300,6 @@ app.delete('/teams/:id', async (req, res, next) => {
     // Удаляем команду по её ID
     await pool.query('DELETE FROM teams WHERE id = $1', [id]);
     
-    // Можно также удалить всех пользователей команды, если это нужно
-    // await pool.query('DELETE FROM users WHERE team_id = $1', [id]);
-
     res.status(200).json({ message: 'Team deleted successfully' });
   } catch (error) {
     console.error('Error deleting team:', error);
@@ -312,6 +307,39 @@ app.delete('/teams/:id', async (req, res, next) => {
   }
 });
 
+// Маршрут для удаления пользователя
+app.delete('/users/:id', async (req, res, next) => {
+  const { id } = req.params;
+
+  try {
+    // Удаляем пользователя по его ID
+    await pool.query('DELETE FROM users WHERE id = $1', [id]);
+
+    res.status(200).json({ message: 'User deleted successfully' });
+  } catch (error) {
+    console.error('Error deleting user:', error);
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
+
+// Маршрут для обновления данных пользователя
+app.put('/users/:id', async (req, res, next) => {
+  const { id } = req.params; // ID пользователя
+  const { team_id, role } = req.body; // Новая команда и роль
+
+  try {
+    // Обновляем пользователя с новыми данными (команда и роль)
+    await pool.query(
+      'UPDATE users SET team_id = $1, role = $2 WHERE id = $3',
+      [team_id, role, id]
+    );
+
+    res.status(200).json({ message: 'User updated successfully' });
+  } catch (error) {
+    console.error('Error updating user:', error);
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
 
 
 // конец получения таблицы
@@ -450,6 +478,51 @@ app.put('/teamleader/requests/:id/reject', async (req, res) => {
 
 //End of teamlead finction
 
+
+//LeadVertex
+
+// Получение списка статусов
+app.get('/api/status-list', async (req, res) => {
+  try {
+    const response = await axios.get(`https://gesondheet.leadvertex.ru/api/admin/getStatusList.html?token=${LDapi}`);
+    res.json(response.data);
+  } catch (error) {
+    console.error('Error fetching status list:', error);
+    res.status(500).json({ error: 'Failed to fetch status list' });
+  }
+});
+
+// Получение ID всех заказов в статусе
+app.get('/api/orders-by-status', async (req, res) => {
+  const statusID = 1;
+  try {
+    const response = await axios.get(`https://gesondheet.leadvertex.ru/api/admin/getOrdersIdsInStatus.html?token=${LDapi}&status=${statusID}`);
+    res.json(response.data);
+  } catch (error) {
+    console.error('Error fetching orders by status:', error);
+    res.status(500).json({ error: 'Failed to fetch orders by status' });
+  }
+});
+
+// Получение заказов по параметрам
+app.get('/api/orders-by-condition', async (req, res) => {
+  const { from, to } = req.query; // Получаем параметры даты из запроса
+
+  if (!from || !to) {
+    return res.status(400).json({ error: 'Missing date parameters' });
+  }
+
+  try {
+    const response = await axios.get(`https://gesondheet.leadvertex.ru/api/statistic/webmasters.html?token=${LDapi}&from=${from}&to=${to}`);
+    res.json(response.data);
+  } catch (error) {
+    console.error('Error fetching orders by condition:', error);
+    res.status(500).json({ error: 'Failed to fetch orders by condition' });
+  }
+});
+
+
+//end Leadvertex
 
 //Expenses
 app.get('/api/expenses', async (req, res) => {
@@ -620,6 +693,7 @@ app.get('/api/teams', async (req, res) => {
 
 
 //End expenses
+
 
 
 //Profile page
